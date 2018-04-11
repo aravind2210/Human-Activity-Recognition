@@ -2,7 +2,7 @@
 title: "Human Activity Recognition"
 author: "Aravind"
 date: "April 1, 2018"
-output: html_document
+output: md_document
 ---
 
 Data Analysis on Weight Lifting Exercise Dataset

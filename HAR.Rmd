@@ -1,0 +1,298 @@
+---
+title: "Human Activity Recognition"
+author: "Aravind"
+date: "April 1, 2018"
+output: html_document
+---
+
+Data Analysis on Weight Lifting Exercise Dataset
+=================================================
+
+## Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+## Data
+
+The training data for this project are available here:
+
+[training](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+
+The test data are available here:
+
+[testing](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+
+The data for this project come from this source: [Weight Lifting Exercise Dataset](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har)
+
+
+## Objective
+
+The goal of the project is to predict the manner in which they did the exercise. The outcome variable is the "classe" variable in the training dataset. A detailed report on how to built the model, cross validation, expected out of sample error, and choices made to clean the dataset is presented. The machine learning algorithms are implemented and then compared based on the test dataset.
+
+## Analysis
+
+### Required packages
+```{r}
+library(corrplot)
+library(caret)
+library(dplyr)
+library(rattle)
+library(randomForest)
+library(klaR)
+library(e1071)
+library(rpart)
+library(pROC)
+```
+
+## Loading the data
+```{r}
+training <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv")
+testing <- read.csv("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv")
+dim(training)
+dim(testing)
+str(training)
+```
+
+## Data Visualization
+```{r}
+## Converting "classe" variable into factor
+training$classe <- as.factor(training$classe)
+
+## Proportion of the outcome variable
+round(prop.table(table(training$classe)), 2)
+```
+
+The data is slightly unbalanced with classe 'A' exercise resembling majority of the population.
+
+## Data Clensing
+
+The dataset consists of 160 columns. It is important to get rid of variables that do not affect the outcome. the following methods are implemented on the training and testing data set to clean the data.
+
+1. Removing features consisting of missing values more than 90%.
+
+```{r}
+training[training == ""] <- NA
+nul <- apply(training, 2, function(x) {sum(is.na(x))})
+nul <- nul /nrow(training)
+training <- training[!(nul>0.90)]
+testing <- testing[!(nul>0.9)]
+dim(training)
+```
+
+The new training data set is filtered from 160 to `r dim(training)[2]`
+
+2. Non Zero Variance testing
+
+```{r}
+x <- nearZeroVar(training, saveMetrics = TRUE)
+training <- training[, -x$nzv]
+testing <- testing[,-x$nzv]
+dim(training)
+```
+
+The attributes are now reduced to `r dim(training)[2]` variables.
+
+3. Removing columns that do not affect the outcome of the dataset.
+
+```{r}
+names(training)
+## Looking at the data, the "X", "user_name", "raw_timestamp_part1", "raw_timestamp_part2", "cvtd_timestamp", "new_window", and "num_window" variables cannot be used for prediction.
+
+training <- training[,-(1:7)]
+testing <- testing[,-(1:7)]
+dim(training)
+```
+
+The new data set is now reduced to `r dim(training)[2]` columns.
+
+4. Correlation plot
+
+```{r}
+corr_mat <- round(cor(training[,-52], method = "pearson"),1)
+corrplot(corr_mat, tl.col = "black", method = "shade",type = "lower",mar=c(0,1,0,1), tl.srt = 40)
+```
+
+The dark shades shows that there is some correlation between existing variables.
+
+Checking for coorelation using findcorrelation function from the caret package with cutoff value of 90%.
+
+```{r}
+training <- training %>% 
+  dplyr::select(-findCorrelation(corr_mat, cutoff = 0.9))
+testing <-  testing %>% 
+  dplyr::select(-findCorrelation(corr_mat, cutoff = 0.9))
+dim(training)
+```
+
+After doing correlation, the new features are reduced to `r dim(training)[2]`.
+
+## Cross Validation
+
+```{r}
+set.seed(1250)
+intrain <- createDataPartition(y=training$classe, p=.70, list = FALSE)
+trainingV <- training[intrain,]
+testingV <- training[-intrain,]
+dim(trainingV)
+dim(testingV)
+```
+
+After cross validating the training dataset, the new training dataset consists of `r dim(trainingV)[1]` observations and `r dim(trainingV)[2]` variables.
+The validated testing dataset consists of `r dim(testingV)[1]` observations and `r dim(testingV)[2]` variables.
+The test data set consists of `r dim(testing)[1]` observations and `r dim(testing)[2]` variables.
+
+## Principle Component Analysis (PCA)
+
+```{r}
+PCA = preProcess(trainingV[,-49], method = "pca", thresh = 0.975)
+## The first 25 PCA's account for 95% of the information, and 30 PCA,s account for 97.5% of the information.
+trainV.data <- predict(PCA, newdata = trainingV)
+testV.data <- predict(PCA, newdata = testingV)
+```
+
+## Machine Learning Models
+
+### 1. Supply Vector Machine (SVM)
+
+Predictive modelling for human activity recognition using SVM algorithm.SVMs can efficiently perform a non-linear classification using what is called the kernel trick, implicitly mapping their inputs into high-dimensional feature spaces.
+
+```{r}
+svm_model <- svm(classe~.,trainV.data)
+
+## Estimating the validation of the model on validation data set.
+pred_svm <- predict(svm_model,testV.data)
+confusionMatrix(pred_svm, testingV$classe)
+oos_svm <- (1 - as.numeric(confusionMatrix(pred_svm, testingV$classe)$overall[1]))*100
+accuracy_svm <-confusionMatrix(pred_svm, testingV$classe)$overall[1]*100
+```
+
+The estimated accuracy of SVM model is `r accuracy_svm`% and out of sample error rate is `r oos_svm`%.
+
+### 2. Decision Tree
+
+Decision Tree algorithm is being implemented to predict the model because of its interpretability feature.
+
+```{r}
+dt_model <- rpart(classe ~ ., data= trainV.data, method="class")
+fancyRpartPlot(dt_model)
+
+## Estimating the validation of the model.
+pred_dt <- predict(dt_model, testV.data, type = "class")
+confusionMatrix(pred_dt, testingV$classe)
+oos_dt <- (1 - as.numeric(confusionMatrix(pred_dt, testingV$classe)$overall[1]))*100
+accuracy_dt <-confusionMatrix(pred_dt, testingV$classe)$overall[1]*100
+```
+
+The estimated accuracy of Decision Tree model is `r accuracy_dt`% and out of sample error rate is `r oos_dt`%.
+
+The Decision Tress model did not yielded best results.
+
+### 3. Random Forests (RF)
+
+Random Forests algorithm is used to fit the model because it automatically selects important variables and is robust to correlated covariates & outliers in general.
+
+```{r}
+rf_model <- randomForest(classe ~ ., data= trainV.data, method="class")
+## Estimating the validation of the model.
+
+pred_rf <- predict(rf_model, testV.data, type = "class")
+confusionMatrix(pred_rf, testingV$classe)
+oos_rf <- (1 - as.numeric(confusionMatrix(pred_rf, testingV$classe)$overall[1]))*100
+accuracy_rf <-confusionMatrix(pred_rf, testingV$classe)$overall[1]*100
+```
+
+The estimated accuracy of Decision Tree model is `r accuracy_rf`% and out of sample error rate is `r oos_rf`%. The sensitivity of the model is in the range of 95% to 99%, while the specificity is more than 98.5% for each case.
+
+### 4. Naive Bayes 
+
+Naive Bayes algorithm is used beacause it requires less model training time.
+
+```{r}
+nb_model <- naiveBayes(classe ~ ., data= trainV.data, method="class")
+## Estimating the validation of the model.
+
+pred_nb <- predict(nb_model, testV.data, type = "class")
+confusionMatrix(pred_nb, testingV$classe)
+oos_nb <- (1 - as.numeric(confusionMatrix(pred_nb, testingV$classe)$overall[1]))*100
+accuracy_nb <-confusionMatrix(pred_nb, testingV$classe)$overall[1]*100
+```
+
+The estimated accuracy of Naive Bayes model is `r accuracy_nb`% and out of sample error rate is `r oos_nb`%. The Naive Bayes algorithm did not yielded best results.
+
+Based on the different modeling methods, Random forest algorithm has better accuracy of 98%, with less out of sample error.
+
+### Predicting the testing dataset using Random Forest model.
+
+```{r}
+testingPC <- predict(PCA, newdata = testing)
+pred_testing <- predict(rf_model, newdata = testingPC)
+pred_testing
+table(pred_testing)
+plot(pred_testing)
+box()
+```
+
+## Conclusion
+
+```{r echo=FALSE} 
+data.frame(ML = c("SVM", "Decision Tree", "Random Forest", "Naive Bayes"),
+           Accuracy = c(accuracy_svm, accuracy_dt, accuracy_rf, accuracy_nb),
+           OOS_Error = c(oos_svm, oos_dt, oos_rf, oos_nb))
+```
+
+In this analysis, Weight lifting exercise having 19622 observations and 160 variables are analyzed and predicted the manner in which the people exercise. The training set is splitted into 70% of the total observations for model building, and 30% of the observations were used for model validation. Several machine learning algorithms are applied to the model and on comparison, the best model is achieved by the Random Forest algorithm. The Random Forest model has a test accuracy of `r accuracy_rf`% and lower out of sample error of `r oos_rf`%, which is not overlapping with observations used to built the model. The sensitivity was in between 95%-99% and the specificity was over 98.5% for all classes (class A-E, total 5 classes). Overall, the model is well developed to predict the exercise classes during weight lifting. 
+
+## Limitation
+
+The observed data used in the analysis was collected only from 6 young health participants in an experiment using Microsoft Kinect. This model showed about 98% accuracy. However, if the conditions are different, such as data collected with elder people and/or unhealthy people, the model may not perform well.
+
+## Reference
+
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
+Cited by 2 (Google Scholar
+
+Read more: http://groupware.les.inf.puc-rio.br/har#ixzz5CLDtqnCj
+
+## Appendix
+
+### ROC Curves:
+
+```{r}
+## SVM ROC Curve
+roc_svm <- multiclass.roc(testingV$classe, as.numeric(predict(svm_model, testV.data, type = 'response')))
+auc(roc_svm)
+sv <- roc_svm[['rocs']]
+plot.roc(sv[[1]])
+sapply(2:length(sv), function(i) lines.roc(sv[[i]],col=i))
+```
+
+```{r}
+## Decsion Tree ROC Curve
+roc_dt <- multiclass.roc(testingV$classe, as.numeric(predict(dt_model, testV.data, type = 'class')))
+auc(roc_dt)
+dt <- roc_dt[['rocs']]
+plot.roc(dt[[1]])
+sapply(2:length(dt), function(i) lines.roc(dt[[i]],col=i))
+
+```
+
+```{r}
+## Random Forest ROC Curve
+roc_rf <- multiclass.roc(testingV$classe, as.numeric(predict(rf_model, testV.data, type = 'response')))
+auc(roc_rf)
+rf <- roc_rf[['rocs']]
+plot.roc(rf[[1]])
+sapply(2:length(rf), function(i) lines.roc(rf[[i]],col=i))
+```
+
+```{r}
+## Naive Bayes ROC Curve
+roc_nb <- multiclass.roc(testingV$classe, as.numeric(predict(nb_model, testV.data, type = 'class')))
+auc(roc_nb)
+nb <- roc_nb[['rocs']]
+plot.roc(nb[[1]])
+sapply(2:length(nb), function(i) lines.roc(nb[[i]],col=i))
+```
+
